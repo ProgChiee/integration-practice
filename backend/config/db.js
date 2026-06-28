@@ -1,25 +1,11 @@
-const mysql = require("mysql2");
-const dotenv = require("dotenv");
+require("dotenv").config(); // <--- SIGURADUHING NASA PINAKATAAS ITO!
+const { createClient } = require("@supabase/supabase-js");
 
-dotenv.config();
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
 
-const pool = mysql.createPool({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  waitForConnections: true,
-  connectionLimit: 10,
-});
+const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Test connection
-pool.getConnection((err, connection) => {
-  if (err) {
-    console.error("Database connection failed:", err.message);
-  } else {
-    console.log("Connected to MySQL database!");
-    connection.release();
-  }
-});
+console.log("✅ Supabase Client Initialized!");
 
-module.exports = pool.promise();
+module.exports = supabase;

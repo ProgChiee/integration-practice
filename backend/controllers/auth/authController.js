@@ -1,6 +1,6 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const db = require("../../config/db");
+const db = require("../../config/db"); // Kung db.js pa rin ang pangalan, basta ito yung may createClient() ng Supabase
 
 // ─── REGISTER ───────────────────────────────────────────────
 exports.register = async (req, res) => {
@@ -11,34 +11,43 @@ exports.register = async (req, res) => {
   }
 
   try {
-    const [existing] = await db.query(
-      "SELECT id FROM users WHERE email = ?",
-      [email]
-    );
+    // 1. Check kung may umiiral nang email sa Supabase
+    const { data: existing, error: checkError } = await db
+      .from("users")
+      .select("id")
+      .eq("email", email);
 
-    if (existing.length > 0) {
+    if (checkError) throw checkError;
+
+    if (existing && existing.length > 0) {
       return res.status(409).json({ message: "Email is already registered." });
     }
 
+    // 2. I-hash ang password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    await db.query(
-      `INSERT INTO users 
-        (full_name, email, password, region, diet_type, allergies) 
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        fullName,
-        email,
-        hashedPassword,
-        region || null,
-        dietType || "no_restrictions",
-        JSON.stringify(allergies || []),
-      ]
-    );
+    // 3. Ayusin ang format ng allergies array
+    const finalAllergies = (allergies || []).map(a => a === 'others' ? `others: ${otherAllergy || ''}` : a);
+
+    // 4. I-insert sa Supabase (Gagamitin ang totoong column names mo sa DB)
+    const { error: insertError } = await db
+      .from("users")
+      .insert([
+        {
+          full_name: fullName,
+          email: email,
+          password: hashedPassword,
+          region: region || null,
+          diet_type: dietType || "no_restrictions",
+          allergies: finalAllergies, // Otomatikong array/JSONB ito sa Supabase!
+        }
+      ]);
+
+    if (insertError) throw insertError;
 
     res.status(201).json({ message: "Account created successfully!" });
   } catch (error) {
-    console.error("Register error:", error);
+    console.error("Register error:", error.message || error);
     res.status(500).json({ message: "Server error. Please try again." });
   }
 };
@@ -47,32 +56,32 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   const { email, password } = req.body;
 
-  // 1. Check kung may kulang na fields
   if (!email || !password) {
     return res.status(400).json({ message: "Email and password are required." });
   }
 
   try {
-    // 2. Hanapin ang user sa database
-    const [users] = await db.query(
-      "SELECT * FROM users WHERE email = ?",
-      [email]
-    );
+    // 1. Hanapin ang user sa Supabase (.single() para isang object lang ang ibalik, hindi array)
+    const { data: user, error: fetchError } = await db
+      .from("users")
+      .select("*")
+      .eq("email", email)
+      .maybeSingle(); // Iiwas sa error kung walang nahanap
 
-    if (users.length === 0) {
+    if (fetchError) throw fetchError;
+
+    if (!user) {
       return res.status(401).json({ message: "Invalid email or password." });
     }
 
-    const user = users[0];
-
-    // 3. I-compare ang password
+    // 2. I-compare ang password gamit ang bcrypt
     const isMatch = await bcrypt.compare(password, user.password);
 
     if (!isMatch) {
       return res.status(401).json({ message: "Invalid email or password." });
     }
 
-    // 4. Gumawa ng JWT token
+    // 3. Gumawa ng JWT token
     const token = jwt.sign(
       { id: user.id, email: user.email },
       process.env.JWT_SECRET,
@@ -89,7 +98,7 @@ exports.login = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Login error:", error);
+    console.error("Login error:", error.message || error);
     res.status(500).json({ message: "Server error. Please try again." });
   }
 };
@@ -97,18 +106,23 @@ exports.login = async (req, res) => {
 // ─── GET CURRENT USER (protected) ───────────────────────────
 exports.getMe = async (req, res) => {
   try {
-    const [users] = await db.query(
-      "SELECT id, full_name, email, created_at FROM users WHERE id = ?",
-      [req.userId]
-    );
+    // Kunin ang user profile base sa id na galing sa authMiddleware (req.userId)
+    const { data: user, error: fetchError } = await db
+      .from("users")
+      .select("id, full_name, email, created_at")
+      .eq("id", req.userId)
+      .maybeSingle();
 
-    if (users.length === 0) {
+    if (fetchError) throw fetchError;
+
+    if (!user) {
       return res.status(404).json({ message: "User not found." });
     }
 
-    res.status(200).json({ user: users[0] });
-  } catch (error) {
-    console.error("GetMe error:", error);
-    res.status(500).json({ message: "Server error." });
-  }
+    res.status(200).json({ user });
+ } catch (error) {
+  console.error("Register error FULL:", JSON.stringify(error, null, 2));
+  console.error("Register error message:", error.message);
+  res.status(500).json({ message: "Server error. Please try again." });
+}
 };
